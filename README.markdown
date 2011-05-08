@@ -1,9 +1,6 @@
 django-soupmigration
 ====================
-
-Author
-------
-- [Jacob Magnusson](http://twitter.com/pyjacob)
+[Jacob Magnusson](http://twitter.com/pyjacob)
 
 About
 -----
