@@ -5,7 +5,7 @@ django-soupmigration
 About
 -----
 Easily migrate MySQL database with lots of irregularities to your Django
-project. Requires MySQLdb.
+project.
 
 Requirements
 ------------
@@ -15,7 +15,15 @@ Requirements
 
 Install
 -------
-* `$ cd django-soupmigration`
-* `$ python setup.py install`
-* Create migration file and subclass `Data` and `Migration`.
-* See documentation for class attributes to provide.
+1. `$ cd django-soupmigration`
+2. `$ python setup.py install`
+
+How-To
+------
+1. Create migration file and subclass `Data` and `Migration`.
+2. See documentation for class attributes to provide.
+3. `$ cd /path/to/djangoproject`
+4. `$ python setup.py shell`
+5. `>>> from myapp.soup import MyModelMigration`
+6. `>>> migration = MyModelMigration()`
+7. `>>> migrate.insert()`
