@@ -15,8 +15,9 @@ Requirements
 
 Install
 -------
-1. `$ cd django-soupmigration`
-2. `$ python setup.py install`
+1. `$ git clone https://github.com/jmagnusson/django-soupmigration.git`
+2. `$ cd django-soupmigration`
+3. `$ python setup.py install`
 
 How-To
 ------
