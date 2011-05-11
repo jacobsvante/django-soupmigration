@@ -167,13 +167,14 @@ class Data(object):
 
                     # Don't add if we get any matches from `data_filter`
                     if hasattr(self, 'data_filter'):
-                        matches = []
+                        matches = {}
                         for key, val in self.data_filter.items():
                             if dic.get(key, '') == val:
-                                matches.append((key, val))
+                                matches.update({key: val})
                         if matches:
-                            self.log.add(affected=dic[new_unique], msg='Not ' \
-                                'added as there were matches from data_filter',
+                            self.log.add(affected=dic[new_unique], msg=
+                                'Found matches for data_filter({}).' \
+                                'Removed.'.format(', '.join(matches.keys())),
                             )
                             continue
                 self.data[table].append(dic)
