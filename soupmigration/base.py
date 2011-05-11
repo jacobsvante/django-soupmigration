@@ -134,14 +134,19 @@ class Data(object):
 
                 # If we have a mapping, rename and delete keys as specified.
                 if hasattr(self, 'mapping'):
-                    mapping_keys = self._get_mapping_keys()
+                    for_all = self.mapping.pop('all', {})
+                    for mapping_keys in self.mapping:
+                        self.mapping[mapping_keys].update(for_all)
+                    # mapping_keys = self._get_mapping_keys()
                     items_to_add = {}
                     keys_to_del = []
 
-                    # Rename unique_field
                     old_unique, new_unique = self.unique_field
-                    dic[new_unique] = dic[old_unique]
-                    del dic[old_unique]
+
+                    # Rename unique key if new name was specified
+                    if new_unique and old_unique != new_unique:
+                        dic[new_unique] = dic[old_unique]
+                        del dic[old_unique]
 
                     for key in dic:
                         if key == new_unique:
@@ -149,8 +154,10 @@ class Data(object):
                         new_key = self.mapping[table].get(key)
                         if new_key:
                             items_to_add[new_key] = dic[key]
-                        if new_key or key not in mapping_keys:
                             keys_to_del.append(key)
+                        if key not in self.mapping[table]:
+                            dic[key] = ''
+                            # keys_to_del.append(key)
 
                     keys_to_del.reverse()
                     for k in keys_to_del:
