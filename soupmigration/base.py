@@ -106,8 +106,6 @@ class Data(object):
         if hasattr(self, 'mapping'):
             assert isinstance(self.mapping, dict), '`mapping` must be ' \
                 'a dictionary.'
-            assert set(self.mapping.keys()) <= set(self.tables), \
-                'All keys in `mapping` be existing table names.'
             self.tables = [t for t in self.tables if t in self.mapping]
 
     def load_data(self):
