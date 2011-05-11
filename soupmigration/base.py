@@ -499,6 +499,10 @@ class Log(object):
             affected = [affected]
         dic = dict(affected=list(affected), msg=msg)
         print self.msg_repr(dic)
+
+        # Warn on invalid keyword arguments.
+        for kwarg in kwargs:
+            print '"{}" is not a valid keyword argument.'.format(kwarg)
         for logitem in self.log_messages:
             if msg in logitem.values():
                 for affected_item in affected:
