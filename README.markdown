@@ -5,11 +5,6 @@ project.
 * **Author:** [Jacob Magnusson](http://twitter.com/pyjacob)
 * **Homepage:** <http://www.github.com/jmagnusson/django-soupmigration/>
 
-
-# About
-Easily migrate MySQL database with lots of irregularities to your Django
-project.
-
 # Requirements
 - Python 2.7+
 - Django 1.0+
