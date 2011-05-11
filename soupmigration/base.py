@@ -26,12 +26,16 @@ class Data(object):
      tables and columns to fetch. Can also be used to rename columns. To get a
      default mapping, use the method `_get_mapping_keys`. Example mapping:
             mapping = {
-                table1: {
-                    column1: new_column_name,
-                    column2: None, # Not renamed
+                'all': {
+                    column1: new_column_name1,
+                    ...
                 },
-                'table2': {
-                    column1: new_column_name2,
+                table1: {
+                    column2: new_column_name2,
+                    column3: None, # Not renamed
+                },
+                table2: {
+                    column4: new_column_name3,
                     ...
                 }
                 ...
