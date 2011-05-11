@@ -232,7 +232,8 @@ class Data(object):
 
         # Add data in reverse table order so that the more important
         # tables' fields replace less important fields
-        for table in reversed(self.table_order):
+        table_order = getattr(self, 'table_order', self.mapping.keys())
+        for table in reversed(table_order):
             for dic in self.data[table]:
                 for m_dic in self.merged_data:
                     if dic[unique_field] == m_dic[unique_field]:
