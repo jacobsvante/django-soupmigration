@@ -323,6 +323,7 @@ class Migration(object):
         to `m2m_data`.
         Always return a list.
         """
+        assert self.m2m, 'You need to supply `self.m2m` to run this method.'
         if not isinstance(self.m2m, (set, tuple, list)) or not isinstance(
                 self.m2m[0], dict):
             raise TypeError('`m2m` needs to be a list of dictionaries.')
@@ -423,7 +424,7 @@ class Migration(object):
 
         # Prepare m2m data if there is any
         if self.m2m and not self.m2m_data:
-            self.prepare_m2m_strings()
+            self.prepare_m2m()
 
         if self.delete_existing:
             self.model.objects.all().delete()
@@ -452,6 +453,8 @@ class Migration(object):
         """
         Do insert of m2m data.
         """
+        assert self.m2m, 'You need to supply `self.m2m` to run this method.'
+        assert self.m2m_data, 'You need to prep m2m data first'
         for m2m in self.m2m:
             field = m2m['field']
             lookup_fields = m2m['lookup_fields']
