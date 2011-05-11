@@ -89,9 +89,8 @@ class Data(object):
         self.empty_values += [None, 'None', 'NULL', '0']
 
         # Warn on invalid keyword arguments.
-        if kwargs:
-            for kwarg in kwargs:
-                print '"{}" is not a valid keyword argument.'.format(kwarg)
+        for kwarg in kwargs:
+            print '"{}" is not a valid keyword argument.'.format(kwarg)
 
         self.load_data()
         self.clean()
