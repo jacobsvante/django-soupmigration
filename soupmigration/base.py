@@ -294,9 +294,11 @@ class Migration(object):
         self.data = None
         self.m2m_data = []
         self.unique_field = None
-        self.m2m = None
+        self.m2m = []
+        self.fk = []
         self.delete_existing = False
         self.log = Log()
+        self.get_or_create = False
 
     def get_model(self, field_name):
         return self.model._meta.get_field_by_name(
