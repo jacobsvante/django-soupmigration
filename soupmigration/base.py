@@ -495,20 +495,25 @@ class Log(object):
     def add(self, **kwargs):
         affected = kwargs.pop('affected', None) or 'ALL'
         msg = kwargs.pop('msg')
-        if isinstance(affected, basestring):
-            affected = [affected]
-        dic = dict(affected=list(affected), msg=msg)
-        print self.msg_repr(dic)
+        exception = kwargs.pop('exception', None)
 
         # Warn on invalid keyword arguments.
         for kwarg in kwargs:
             print '"{}" is not a valid keyword argument.'.format(kwarg)
+
+        if not isinstance(affected, (list, set, tuple)):
+            affected = [unicode(affected)]
+        dic = dict(affected=list(affected), msg=msg, exceptions=[])
+        if exception and exception not in dic['exceptions']:
+            dic['exceptions'].append(exception)
+        # Add affected item(s) if not in list
         for logitem in self.log_messages:
             if msg in logitem.values():
                 for affected_item in affected:
                     if affected_item not in logitem['affected']:
                         logitem['affected'].append(affected_item)
                 return
+        print 'Log({})'.format(msg) # Print on new message
         self.log_messages.append(dic)
 
     def msg_repr(self, dic):
