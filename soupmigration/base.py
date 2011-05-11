@@ -180,8 +180,9 @@ class Data(object):
                     if not isinstance(value, basestring):
                         value = unicode(value)
                     dic[key] = value.strip()
-                    if value in self.empty_values:
-                        dic[key] = u''
+                    if hasattr(self, 'empty_values'):
+                        if value in self.empty_values:
+                            dic[key] = u''
 
     def _get_mapping_keys(self):
         assert getattr(self, 'mapping')
