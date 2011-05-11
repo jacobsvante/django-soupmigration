@@ -98,6 +98,8 @@ class Data(object):
 
         self.load_data()
         self.clean()
+        if hasattr(self, 'mapping'):
+            self.merge()
 
     def load_table_names(self):
         """ Load all table names """
