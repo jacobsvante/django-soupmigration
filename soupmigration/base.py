@@ -459,7 +459,8 @@ class Migration(object):
                         try:
                             kwargs = regex_lookups({lookup: value})
                             m2m_obj = m2m_objs.get(**kwargs)
-                            break # Jump out of loop on first match
+                            if m2m_obj:
+                                break # Jump out of loop on first match
                         except ObjectDoesNotExist:
                             direct_hit = False
                     if not m2m_obj and m2m.get('get_or_create') is True:
