@@ -1,6 +1,6 @@
 import re
 import json
-from django.core.exceptions import ObjectDoesNotExist
+from django.core.exceptions import ObjectDoesNotExist, MultipleObjectsReturned
 from soupmigration.utils import regex_lookups, remove_lookup_type
 from django.db import settings
 import MySQLdb
@@ -481,6 +481,16 @@ class Migration(object):
                                 break # Jump out of loop on first match
                         except ObjectDoesNotExist:
                             direct_hit = False
+                        except MultipleObjectsReturned as e:
+                            direct_hit = False
+                            m2m_obj = m2m_objs.filter(**kwargs)[0:1].get()
+                            self.log.add(
+                                affected=unique_id, exception=e,
+                                msg=u"Got {1} on '{0}'.".format(field,
+                                    e.__class__.__name__),
+                            )
+                            if m2m_obj:
+                                break
                     if not m2m_obj and m2m.get('get_or_create') is True:
                         m2m_obj = m2m_model(**remove_lookup_type(kwargs))
                         m2m_obj.save()
