@@ -7,6 +7,6 @@ setup(
     author_email='m@jacobian.se',
     packages=['soupmigration'],
     install_requires=['distribute', 'Django>=1.0', 'MySQL-python>=1.0'],
-    license='LICENSE',
+    license='LICENSE.markdown',
     description='Migrate legacy MySQL databases to your Django models.',
 )
