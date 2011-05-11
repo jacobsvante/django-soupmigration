@@ -304,6 +304,34 @@ class Migration(object):
         return self.model._meta.get_field_by_name(
             field_name)[0].related.parent_model
 
+    def valid_fields(self):
+        fields = []
+        for key in self.data[0].keys():
+            if key in self.model._meta.get_all_field_names():
+                fields += [key]
+            else:
+                self.log.add(msg=u'{} is not an available field.'.format(key))
+        return fields
+
+    def required_fields(self, model=None):
+        if not model:
+            model = self.model
+        required = set()
+        for field, m in model._meta.get_fields_with_model():
+            name = getattr(field, 'name')
+            if name in ('id', 'slug'):
+                continue
+            if getattr(field, 'blank', False) or field.has_default():
+                continue
+            required.add(name)
+        return required
+
+    def required_field_empty(self, kwargs):
+        for key, value in kwargs.items():
+            if key in self.required_fields() and not value:
+                return True
+        return False
+
     def fk_to_model(self):
         """
         Takes fields that are set defined in self.fk and turns the string
@@ -429,22 +457,22 @@ class Migration(object):
         if self.delete_existing:
             self.model.objects.all().delete()
 
-        valid_fields = []
-        for key in self.data[0].keys():
-            if key in self.model._meta.get_all_field_names():
-                valid_fields += [key]
-            else:
-                self.log.add(msg=u'{} is not an available field.'.format(key))
-
         if hasattr(self, 'fk'):
             self.fk_to_model()
 
-        for i, dic in enumerate(self.data):
+        for dic in self.data:
             kwargs = {}
-            for key in valid_fields:
+            for key in self.valid_fields():
                 kwargs.update({key: dic[key]})
-            self.model(**kwargs).save()
-            print '{} inserted.'.format(dic[self.unique_field])
+            if self.required_field_empty(kwargs):
+                self.log.add(msg='Required field "{}" empty.'.format(key),
+                    affected=dic[self.unique_field])
+                continue
+            if self.get_or_create is True:
+                self.model.objects.get_or_create(**kwargs)
+            else:
+                self.model(**kwargs).save()
+            print u'{} inserted.'.format(dic[self.unique_field])
 
         if self.m2m_data:
             self.m2m_insert()
