@@ -341,9 +341,38 @@ class Migration(object):
             return
         for fk in self.fk:
             field = fk['field']
+            lookup_fields = fk['lookup_fields']
+            fk_model = self.get_model(field)
+            fk_objs = fk_model.objects.all()
+
             for dic in self.data:
-                kwargs = {fk['lookup_fields'][0]: dic[field]}
-                dic[field] = self.get_model(field).objects.get(**kwargs)
+                unique_id = dic[self.unique_field]
+                value = dic[field]
+
+                if 'replace' in fk:
+                    for repl in fk['replace']:
+                        old, new = repl
+                        value = value.replace(old, new)
+
+                if not value:
+                    self.log.add(msg='Empty value on "{}".'.format(field),
+                        affected=unique_id)
+                    continue
+                fk_obj = None
+                for lookup in lookup_fields:
+                    try:
+                        kwargs = regex_lookups({lookup: value})
+                        fk_obj = fk_objs.get(**kwargs)
+                        if fk_obj:
+                            break # Jump out of loop on first match
+                    except ObjectDoesNotExist:
+                        pass
+                if fk_obj:
+                    dic[field] = fk_obj
+                    print u'added {}'.format(fk_obj)
+                else:
+                    self.log.add(msg="Couldn't turn value into fk.",
+                        affected=unique_id)
 
     def prepare_m2m(self):
         """
