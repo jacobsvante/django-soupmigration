@@ -13,15 +13,6 @@ class Data(object):
 
     Explanation of optional class attributes:
 
-    `data_filter` should be a dictionary of keys and values to determine if
-     a dictionary ("row") should be deleted from `data`. Example:
-        data_filter = {
-            column1: 'not_used',
-            ...
-        }
-        Will remove all dicts in `data` where key 'column1' has the value
-        'not_used'.
-
     `mapping` is an optional but useful attribute that is used to specify
      tables and columns to fetch. Can also be used to rename columns. To get a
      default mapping, use the method `_get_mapping_keys`. Example mapping:
@@ -70,6 +61,7 @@ class Data(object):
         ]
     """
     empty_values = []
+    unique_field = ('id', '__UNIQUE_FIELD__')
 
     def __init__(self, **kwargs):
         self.connect_kwargs = {
@@ -92,12 +84,20 @@ class Data(object):
         self.log = Log()
         self.empty_values += [None, 'None', 'NULL', '0']
 
+
         # Warn on invalid keyword arguments.
         for kwarg in kwargs:
-            print '"{}" is not a valid keyword argument.'.format(kwarg)
+            print u'"{}" is not a valid keyword argument.'.format(kwarg)
+
+        if hasattr(self, 'mapping'):
+            if 'all' in self.mapping:
+                self.mapping['all'].update([self.unique_field])
+            else:
+                self.mapping['all'] = dict([self.unique_field])
 
         self.load_data()
         self.clean()
+
         if hasattr(self, 'mapping'):
             self.merge()
 
@@ -137,7 +137,6 @@ class Data(object):
                     for_all = self.mapping.pop('all', {})
                     for mapping_keys in self.mapping:
                         self.mapping[mapping_keys].update(for_all)
-                    # mapping_keys = self._get_mapping_keys()
                     items_to_add = {}
                     keys_to_del = []
 
@@ -157,7 +156,6 @@ class Data(object):
                             keys_to_del.append(key)
                         if key not in self.mapping[table]:
                             dic[key] = ''
-                            # keys_to_del.append(key)
 
                     keys_to_del.reverse()
                     for k in keys_to_del:
@@ -165,21 +163,9 @@ class Data(object):
                     for i in items_to_add:
                         dic[i] = items_to_add[i]
 
-                    # Don't add if we get any matches from `data_filter`
-                    if hasattr(self, 'data_filter'):
-                        matches = {}
-                        for key, val in self.data_filter.items():
-                            if dic.get(key, '') == val:
-                                matches.update({key: val})
-                        if matches:
-                            self.log.add(affected=dic[new_unique], msg=
-                                'Found matches for data_filter({}).' \
-                                'Removed.'.format(', '.join(matches.keys())),
-                            )
-                            continue
                 self.data[table].append(dic)
 
-            print 'Loaded table `{}`.'.format(table)
+            print u'Loaded table `{}`.'.format(table)
 
     def clean(self):
         """ Clean data.
@@ -238,9 +224,6 @@ class Data(object):
         for value in filter(None, unique_items):
             defaults = default_dic.items()
             defaults.append([unique_field, value])
-            # for key, value in defaults:
-            #     if key in self.not_empty and not value:
-            #         break
             self.merged_data.append(dict(defaults))
 
         # Add data in reverse table order so that the more important
@@ -250,8 +233,8 @@ class Data(object):
             for dic in self.data[table]:
                 for m_dic in self.merged_data:
                     if dic[unique_field] == m_dic[unique_field]:
-                        # Only update when values value is not empty
-                        update_dic = [d for d in dic.items() if d[1]]
+                        # Only update when value is not empty
+                        update_dic = [d for d in dic.items() if d[1].strip()]
                         m_dic.update(update_dic)
                         break
         self.merged_data = sorted(self.merged_data,
