@@ -585,7 +585,7 @@ class Log(object):
 
         # Warn on invalid keyword arguments.
         for kwarg in kwargs:
-            print '"{}" is not a valid keyword argument.'.format(kwarg)
+            print u'"{}" is not a valid keyword argument.'.format(kwarg)
 
         if not isinstance(affected, (list, set, tuple)):
             affected = [unicode(affected)]
@@ -599,14 +599,14 @@ class Log(object):
                     if affected_item not in logitem['affected']:
                         logitem['affected'].append(affected_item)
                 return
-        print 'Log({})'.format(msg) # Print on new message
+        print u'Log({})'.format(msg) # Print on new message
         self.log_messages.append(dic)
 
     def msg_repr(self, dic):
         return u'Log({}: {})'.format(dic['msg'], ', '.join(dic['affected']))
 
     def print_all(self):
-        print '\n'.join([self.msg_repr(log) for log in self.log_messages])
+        print u'\n'.join([self.msg_repr(log) for log in self.log_messages])
 
     def save_as_json(self, output_path):
         with open(output_path, 'w') as f:
