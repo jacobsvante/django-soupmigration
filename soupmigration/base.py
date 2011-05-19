@@ -1,6 +1,8 @@
 import re
 import json
 from django.core.exceptions import ObjectDoesNotExist, MultipleObjectsReturned
+from django.db import connection, IntegrityError
+from django.db.models import Model
 from soupmigration.utils import regex_lookups, remove_lookup_type
 from django.db import settings
 import MySQLdb
@@ -268,26 +270,39 @@ class Migration(object):
             unique for insertion to work.
         `delete_existing`, if True model will be emptied before inserting.
     """
+    unique_field = 'id'
 
     def __init__(self, **kwargs):
         """
         Set instance variables by subclassing Migrate.
         """
         self.model = None
-        self.data = None
-        self.m2m_data = []
-        self.unique_field = None
-        self.m2m = []
-        self.fk = []
+        self.data = []
+        self.deleted_data = []
+        self.rel = []
         self.delete_existing = False
         self.log = Log()
         self.get_or_create = False
+        self.instances_prepared = False
+        self.m2m_prepared = False
 
-    def get_model(self, field_name):
-        return self.model._meta.get_field_by_name(
-            field_name)[0].related.parent_model
+    def get_rel_model(self, field_name):
+        """ Get related model """
+        fn = field_name.replace('_set', '')
+        field = self.model._meta.get_field_by_name(fn)[0]
+        try:
+            return field.related.parent_model # M2M
+        except AttributeError:
+            return field.model # Foreign key
+    
+    def get_rel_obj_field_name(self, rel_obj):
+        fields = [field for field in rel_obj._meta.fields \
+            if getattr(field.rel, 'to', None) == self.model]
+        if fields:
+            return fields[0].name
 
     def valid_fields(self):
+        """ Get a list of all valid fields for the model. """
         fields = []
         for key in self.data[0].keys():
             if key in self.model._meta.get_all_field_names():
@@ -297,6 +312,7 @@ class Migration(object):
         return fields
 
     def required_fields(self, model=None):
+        """ Get a list of all required fields. """
         if not model:
             model = self.model
         required = set()
@@ -309,126 +325,112 @@ class Migration(object):
             required.add(name)
         return required
 
-    def required_field_empty(self, kwargs):
-        for key, value in kwargs.items():
-            if key in self.required_fields() and not value:
-                return True
-        return False
+    def empty_required_fields(self, kwargs):
+        """ Return True if all required fields are in kwargs' keys. """
+        empties = []
+        for key, val in kwargs.items():
+            if key in self.required_fields() and not val:
+                empties.append(key)
+        return empties
 
-    def fk_to_model(self):
-        """
-        Takes fields that are set defined in self.fk and turns the string
-        into the appropriate model object.
-        """
-        if not hasattr(self, 'fk'):
-            return
-        for fk in self.fk:
-            field = fk['field']
-            lookup_fields = fk['lookup_fields']
-            fk_model = self.get_model(field)
-            fk_objs = fk_model.objects.all()
+    def delete_if_all_empty(self, *fields):
+        """ Delete item if all supplied fields are empty on it. """
+        assert isinstance(fields, (set, list, tuple)), 'fields must be an ' \
+            'iterable'
+        assert fields, 'You must specify a set of fields'
 
-            for dic in self.data:
-                unique_id = dic[self.unique_field]
-                value = dic[field]
-
-                if 'replace' in fk:
-                    for repl in fk['replace']:
-                        old, new = repl
-                        value = value.replace(old, new)
-
-                if not value:
-                    self.log.add(msg='Empty value on "{}".'.format(field),
-                        affected=unique_id)
-                    continue
-                fk_obj = None
-                for lookup in lookup_fields:
-                    try:
-                        kwargs = regex_lookups({lookup: value})
-                        fk_obj = fk_objs.get(**kwargs)
-                        if fk_obj:
-                            break # Jump out of loop on first match
-                    except ObjectDoesNotExist:
-                        pass
-                if fk_obj:
-                    dic[field] = fk_obj
-                    print u'added {}'.format(fk_obj)
-                else:
-                    self.log.add(msg="Couldn't turn value into fk.",
-                        affected=unique_id)
-
-    def prepare_m2m(self):
-        """
-        Take a string that's to be turned into m2m data, clean it and move key
-        to `m2m_data`.
-        Always return a list.
-        """
-        assert self.m2m, 'You need to supply `self.m2m` to run this method.'
-        if not isinstance(self.m2m, (set, tuple, list)) or not isinstance(
-                self.m2m[0], dict):
-            raise TypeError('`m2m` needs to be a list of dictionaries.')
-
-        # Determine the keys that should be removed from `self.data`.
-        # The removed keys will be added to `self.m2m_data`.
-        keys_to_remove = []
-        for m2m in self.m2m:
-            keys_to_remove += [m2m['field']]
-            if 'bool_dict' in m2m.keys():
-                keys_to_remove += m2m['bool_dict'].keys()
-
+        items_to_del = []
         for i, dic in enumerate(self.data):
+            delete = True
+            for key, value in dic.items():
+                if key in fields and value.strip():
+                    delete = False
+                    break
+            if delete:
+                self.deleted_data.append(dic)
+                items_to_del.append(i)
+        for i in reversed(items_to_del):
+            self.log.add(affected=self.data[i][self.unique_field],
+                msg=u"Deleted item from list as the following fields were " \
+                    "empty: {}".format(', '.join(fields)),
+            )
+            del self.data[i]
 
-            # The dict to be appended to `self.m2m_data`
-            m2m_dict = {self.unique_field: dic[self.unique_field]}
+    def get_rel_values(self, key):
+        """ Return all values of the specified key from the `rel` mapping. """
+        rels = set()
+        rel = getattr(self, 'rel', [])
+        for dic in rel:
+            if dic.get(key):
+                rels.add(dic[key])
+        return rels
 
-            for m2m in self.m2m:
-                key = m2m.get('key_name') or m2m['field']
+    def get_m2m_fields(self):
+        """ Return all fields in the `rel` mapping that have m2m = True. """
+        m2ms = set()
+        rel = getattr(self, 'rel', [])
+        for dic in rel:
+            if dic.get('m2m') is True:
+                m2ms.add(dic['field'])
+        return m2ms
 
-                # If `remove` regex string supplied, remove matches.
-                regex = m2m.get('remove', '')
-                if regex and key in dic:
-                    dic[key] = re.sub(regex, '', dic.get(key, ''))
+    def insert_after_fields(self):
+        """ Return a list of fields to be inserted after all other fields. """
+        afters = []
+        rel = getattr(self, 'rel', [])
+        for field in rel:
+            if field.get('insert_after') is True:
+                afters.append(field['field'])
+        return afters
 
-                # Split on supplied regex
-                regex = m2m.get('split', '')
-                if regex and key in dic:
-                    dic[key] = re.split(regex, dic.get(key, ''))
+    def sub_text(self, **filterset):
+        """ Substitutes text from fields based on the supplied regex strings.
+        If value is a basestring, text will be removed, otherwise an 2-tuple
+        with (regex, repl) is assumed.
+        Example:
+            filterset = {'name': r'[john|doe]', city: ('NYC', 'New York')}
+            Any occurrences of 'john' or 'doe' in field `name` will be removed.
+            Any occurrences of 'NYC' in field `city` will be replaced with
+            'New York'.
+        """
+        assert filterset, 'You need to supply a set of filters'
 
-                # Add key if it's not in the original data
-                if key not in dic:
-                    dic[key] = []
+        for dic in self.data:
+            for field, regex in filterset.items():
+                repl = ''
+                if isinstance(regex, (list, set, tuple)):
+                    assert len(regex) is 2, 'Please supply 2-tuple ' \
+                        '(regex, repl) only as value.'
+                    regex, repl = regex
+                if isinstance(dic[field], basestring):
+                    dic[field] = [dic[field]]
+                values = []
+                for val in dic[field]:
+                    values.append(re.sub(regex, repl, val))
+                dic[field] = values[0] if len(dic[field]) is 1 else values
 
-                # Return the values of the items with the key name specified
-                # in m2m['key_list'].
-                if m2m.get('key_list'):
-                    for m2m_key in m2m['key_list']:
-                        if dic[m2m_key]:
-                            dic[key].append(dic[m2m_key])
+                self.log.add(
+                    msg=u'Cleaned {} using u"{}"'.format(field, regex))
 
-                # Return the keys of the items whos values don't evaluate to
-                # False.
-                if m2m.get('bool_dict'):
-                    for m2m_key, value in m2m['bool_dict'].items():
-                        if dic[m2m_key]:
-                            dic[key].append(value)
-
-                if not isinstance(dic[key], (set, tuple, list)):
-                    dic[key] = [dic[key]]
-
-                # Remove leading / trailing whitespace and delete empty values.
-                dic[key] = filter(None, [val.strip() for val in dic[key]])
-
-                m2m_dict.update({m2m['field']: dic[key]})
-
-            # Create a new dict without the m2m fields.
-            self.data[i] = dict((k, v) for (k, v) in dic.items()
-                if k not in keys_to_remove)
-
-            # Append the related fields dict to `m2m_data`.
-            self.m2m_data.append(m2m_dict)
+    def filter_data(self, **filterset):
+        """ Remove items if their values are found. Case insensitive. """
+        assert filterset, 'You need to supply a set of filters'
+        items_to_del = []
+        for i, dic in enumerate(self.data):
+            for key, values in filterset.items():
+                if isinstance(values, basestring):
+                    values = [values]
+                for val in values:
+                    if dic[key].strip().lower() == val.lower():
+                        self.log.add(affected=dic[self.unique_field],
+                            msg=u'Filter match: {}="{}"'.format(key, val))
+                        items_to_del.append(i)
+                        continue
+        for i in reversed(items_to_del):
+            del self.data[i]
 
     def item_exists(self, item, *unique):
-        """
+        """ Find out whether an item in `data` exists
         Return True if the item exists based on the list of fields in `unique`.
         """
         assert unique, "Please specify one or more fields that " \
@@ -442,9 +444,7 @@ class Migration(object):
         return False
 
     def get_duplicates(self, *unique):
-        """
-        Return duplicates based on the list of fields in `unique`.
-        """
+        """ Return duplicates based on the list of fields in `unique`. """
         assert unique, "Please specify one or more fields that " \
             "has to be unique (together)."
         unique_values = set()
@@ -457,99 +457,215 @@ class Migration(object):
                 unique_values.add(values)
         return set(tuple(dupes))
 
-    def insert(self):
+    def prep_model_instances(self, **kwargs):
+        """ String > Model
+        Takes fields that are set defined in self.rel and turns the string(s)
+        into the appropriate model object(s).
         """
-        Insert non-relational data.
-        """
+        assert hasattr(self, 'rel'), 'You need to supply `rel` for this method'
+        if kwargs.get('after') is True:
+            rels = [rel for rel in self.rel if rel.get('insert_after') is True]
+        else:
+            rels = [rel for rel in self.rel if not rel.get('insert_after')]
+        for rel in rels:
+            field = rel['field']
+            lookup_fields = rel.get('lookup_fields', [])
+            rel_model = self.get_rel_model(field)
+            rel_objs = rel_model.objects.all()
+            extra_kwargs = rel.get('extra_kwargs', {})
 
-        # Prepare m2m data if there is any
-        if self.m2m and not self.m2m_data:
-            self.prepare_m2m()
-
-        if self.delete_existing:
-            self.model.objects.all().delete()
-
-        if hasattr(self, 'fk'):
-            self.fk_to_model()
-
-        for dic in self.data:
-            kwargs = {}
-            for key in self.valid_fields():
-                kwargs.update({key: dic[key]})
-            if self.required_field_empty(kwargs):
-                self.log.add(msg='Required field "{}" empty.'.format(key),
-                    affected=dic[self.unique_field])
-                continue
-            if self.get_or_create is True:
-                self.model.objects.get_or_create(**kwargs)
-            else:
-                self.model(**kwargs).save()
-            print u'{} inserted.'.format(dic[self.unique_field])
-
-        if self.m2m_data:
-            self.m2m_insert()
-
-    def m2m_insert(self):
-        """
-        Do insert of m2m data.
-        """
-        assert self.m2m, 'You need to supply `self.m2m` to run this method.'
-        assert self.m2m_data, 'You need to prep m2m data first'
-        for m2m in self.m2m:
-            field = m2m['field']
-            lookup_fields = m2m['lookup_fields']
-            m2m_model = self.get_model(field)
-            m2m_objs = m2m_model.objects.all()
-
-            for dic in self.m2m_data:
+            for dic in self.data:
                 unique_id = dic[self.unique_field]
-                obj = self.model.objects.get(**{self.unique_field: unique_id})
-                obj_field = getattr(obj, field)
+                values = dic[field]
+                dic[field] = []
+                objs_to_add = []
 
-                for value in dic[field]:
-                    m2m_obj = None
-                    if not value and m2m.get('warn_on_empty') is True:
-                        self.log.add(affected=unique_id,
-                            msg='Empty value for field "{}"'.format(field))
+                obj = None
+                if rel.get('with_self'):
+                    # Implies insert_after
+                    try:
+                        obj_field = self.get_rel_obj_field_name(rel_model)
+                        obj = self.model.objects.get(
+                            **{self.unique_field: unique_id})
+                        extra_kwargs.update({obj_field: obj})
+                    except ObjectDoesNotExist:
+                        pass
+                    
+
+                if isinstance(values, basestring):
+                    values = [values]
+                if isinstance(values, Model):
+                    continue
+
+                for value in values:
+                    if isinstance(value, Model):
+                        break
+                    if not value:
+                        self.log.add(msg=u'Empty value on "{}".'.format(field),
+                            affected=unique_id)
                         continue
-                    direct_hit = True
+                    rel_obj = None
                     for lookup in lookup_fields:
+                        kwargs = regex_lookups({lookup: value})
+                        kwargs.update(extra_kwargs)
                         try:
-                            kwargs = regex_lookups({lookup: value})
-                            m2m_obj = m2m_objs.get(**kwargs)
-                            if m2m_obj:
-                                break # Jump out of loop on first match
+                            rel_obj = rel_objs.get(**kwargs)
+                            break # Jump out of loop on first match
                         except ObjectDoesNotExist:
-                            direct_hit = False
+                            pass
                         except MultipleObjectsReturned as e:
-                            direct_hit = False
-                            m2m_obj = m2m_objs.filter(**kwargs)[0:1].get()
+                            rel_obj = rel_objs.filter(**kwargs)[0:1].get()
                             self.log.add(
                                 affected=unique_id, exception=e,
                                 msg=u"Got {1} on '{0}'.".format(field,
                                     e.__class__.__name__),
                             )
-                            if m2m_obj:
+                            if rel_obj:
                                 break
-                    if not m2m_obj and m2m.get('get_or_create') is True:
-                        m2m_obj = m2m_model(**remove_lookup_type(kwargs))
-                        m2m_obj.save()
-                    elif not direct_hit and m2m_obj:
-                        self.log.add(
-                            affected=unique_id,
-                            msg=u"Couldn't obtain '{}' with preferred " \
-                            "lookup method for value '{}'".format(
-                                field, value),
-                        )
-
-                    # Connect the related object to 'self.model'
-                    if m2m_obj:
-                        obj_field.add(m2m_obj)
+                    if not rel_obj and rel.get('get_or_create') is True:
+                        rel_obj = rel_model(**remove_lookup_type(kwargs))
+                        rel_obj.save()
+                    if rel_obj:
+                        objs_to_add.append(rel_obj)
                     else:
                         self.log.add(
+                            msg=u"Couldn't turn value {} into '{}' instance." \
+                                 .format(value, rel_model._meta.module_name),
                             affected=unique_id,
-                            msg=u'{}({}) does not exist.'.format(field, value),
                         )
+
+                if objs_to_add:
+                    dic[field] = []
+                    for o in objs_to_add:
+                        if isinstance(o, Model):
+                            dic[field].append(o)
+                    if not rel.get('m2m') is True:
+                        dic[field] = dic[field][0]
+                else:
+                    dic[field] = None
+
+        self.instances_prepared = True
+
+    def prep_m2m(self):
+        """ Turn values into list. Split on regex if supplied. """
+
+        assert self.rel, 'You need to supply `self.rel` to run this method.'
+        if not isinstance(self.rel, (set, tuple, list)) or not isinstance(
+                self.rel[0], dict):
+            raise TypeError('`m2m` needs to be a list of dictionaries.')
+
+        for dic in self.data:
+
+            for m2m in self.rel:
+                if not m2m.get('m2m') is True:
+                    continue
+
+                key = m2m.get('key_name') or m2m['field']
+                new_key = m2m['field']
+
+                # Split on supplied regex
+                dic[new_key] = re.split(m2m.get('split', ''), dic.get(key, ''))
+
+                # Return the values of the items with the key name specified
+                # in m2m['key_list'].
+                if m2m.get('key_list'):
+                    for m2m_key in m2m['key_list']:
+                        if dic[m2m_key]:
+                            dic[new_key].append(dic[m2m_key].strip())
+
+                # Return the keys of the items whos values don't evaluate to
+                # False.
+                if m2m.get('bool_dict'):
+                    for m2m_key, value in m2m['bool_dict'].items():
+                        if dic[m2m_key]:
+                            dic[new_key].append(value.strip())
+
+                # Remove leading / trailing whitespace and delete empty values.
+                dic[new_key] = [val.strip() for val in dic[new_key]]
+                dic[new_key] = filter(
+                    None, [val.strip() for val in dic[new_key]],
+                )
+
+        self.m2m_prepared = True
+
+    def insert(self, **kwargs):
+        """ Do the actual inserting. """
+        after = kwargs.get('after', False)
+
+        # Prepare m2m data if it hasn't been already
+        if not self.m2m_prepared:
+            self.prep_m2m()
+
+        if not self.instances_prepared:
+            self.model.objects.all().delete()
+            self.prep_model_instances()
+
+        insert_after_fields = set(self.insert_after_fields())
+        m2m_fields = set(self.get_m2m_fields()) - insert_after_fields
+        fields = set(self.valid_fields()) - insert_after_fields - m2m_fields
+
+        if after is True:
+            m2m_fields = insert_after_fields - set(self.get_m2m_fields())
+            fields = insert_after_fields - m2m_fields
+
+        for dic in self.data:
+            unique_id = dic[self.unique_field]
+            obj_kwargs = {}
+            m2m_kwargs = {}
+            obj = None
+            for field in fields:
+                # if not dic[field]:
+                #     continue # Don't add if empty
+                obj_kwargs.update({field: dic[field]})
+            for field in m2m_fields:
+                m2m_kwargs.update({field: dic[field]})
+            # all_kwargs = m2m_kwargs.copy()
+            # all_kwargs.update(obj_kwargs)
+            # empty_requireds = self.empty_required_fields(all_kwargs)
+            # if empty_requireds:
+            #     self.log.add(msg=u'Required fields "{}" empty.'.format(
+            #         ', '.join(empty_requireds)),
+            #         affected=unique_id,
+            #     )
+
+            # Save instance (or update if `after` is True)
+            try:
+                if after is True:
+                    obj = self.model.objects.get(**{self.unique_field: unique_id})
+                    for key, val in obj_kwargs.items():
+                        if val:
+                            setattr(obj, key, val)
+                    obj.save()
+                elif self.get_or_create is True:
+                    obj = self.model.objects.get_or_create(**obj_kwargs)[0]
+                else:
+                    obj = self.model(**obj_kwargs)
+                    obj.save()
+            except (IntegrityError, ValueError) as e:
+                # Required to clear PostgreSQL's failed transaction.
+                connection.close()
+                self.log.add(msg=e.message, affected=[unique_id])
+                continue
+
+            # Save m2m rels
+            for m2m_field, m2m_objs in m2m_kwargs.items():
+                field = getattr(obj, m2m_field)
+                if not m2m_objs:
+                    continue
+                for m2m_obj in m2m_objs:
+                    if not isinstance(m2m_obj, Model):
+                        continue
+                    field.add(m2m_obj)
+
+            if obj:
+                print u'{} inserted (and {} m2m relations).'.format(
+                    unique_id, len(m2m_kwargs.values()),
+                )
+
+        if self.insert_after_fields() and not after:
+            print u'Inserting rel fields that have insert_after = True'
+            self.prep_model_instances(after=True)
+            self.insert(after=True)
 
 
 class Log(object):
